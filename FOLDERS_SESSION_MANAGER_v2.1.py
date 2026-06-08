@@ -4,6 +4,7 @@ import json
 import platform
 import subprocess
 import time
+import locale
 from datetime import datetime
 from urllib.parse import unquote
 
@@ -77,6 +78,37 @@ TEXTS = {
 }
 
 # ==========================================
+# MODULE-LEVEL HELPERS
+# ==========================================
+
+def _is_valid_path(path):
+    """Returns True for filesystem paths, CLSID shell paths, and paths with special chars."""
+    if not path:
+        return False
+    if path.startswith('::'):
+        return True
+    try:
+        return os.path.exists(path)
+    except Exception:
+        return False
+
+def _open_path(path):
+    """Open path in Explorer — safe for CLSID (This PC) and unicode paths."""
+    try:
+        if path.startswith('::'):
+            # CLSID — use COM Shell; explorer.exe routes CLSIDs incorrectly
+            shell = win32com.client.Dispatch("Shell.Application")
+            shell.Explore(path)
+        else:
+            subprocess.Popen(['explorer', path])
+    except Exception:
+        try:
+            shell = win32com.client.Dispatch("Shell.Application")
+            shell.Explore(path)
+        except Exception:
+            pass
+
+# ==========================================
 # CUSTOM WIDGETS
 # ==========================================
 
@@ -97,7 +129,7 @@ class CustomTreeWidget(QTreeWidget):
         open_action = QAction("📂 Open Folder", self)
         
         copy_action.triggered.connect(lambda: QApplication.clipboard().setText(item.text(1)))
-        open_action.triggered.connect(lambda: self._open_path(item.text(1)))
+        open_action.triggered.connect(lambda: _open_path(item.text(1)))
         
         menu.addAction(copy_action)
         menu.addAction(open_action)
@@ -105,7 +137,7 @@ class CustomTreeWidget(QTreeWidget):
 
     def on_item_double_clicked(self, item, column):
         if item and item.text(1):
-            self._open_path(item.text(1))
+            _open_path(item.text(1))
 
 # ==========================================
 # MAIN APPLICATION
@@ -253,14 +285,23 @@ class MainWindow(QMainWindow):
         """Get the real filesystem path from an Explorer window.
 
         Fixes CLSID paths (::{xxxx}) returned by Self.Path for library
-        folders like Documents, Downloads, Pictures, etc. by reading
-        LocationURL (file:/// format) instead.
+        folders by reading LocationURL (file:/// format) instead, with
+        encoding fallback for non-UTF-8 systems.
         """
         # Method 1: LocationURL (works for library folders)
         try:
             url = window.LocationURL
             if url and url.startswith('file:///'):
-                decoded = unquote(url[8:])
+                path_part = url[8:]
+                # Try UTF-8 first (standard), then system ANSI code page
+                for enc in ('utf-8', locale.getpreferredencoding(), 'latin-1'):
+                    try:
+                        decoded = unquote(path_part, encoding=enc, errors='strict')
+                        break
+                    except (UnicodeDecodeError, LookupError):
+                        continue
+                else:
+                    decoded = unquote(path_part, encoding='utf-8', errors='replace')
                 return decoded.replace('/', '\\')
         except Exception:
             pass
@@ -268,9 +309,9 @@ class MainWindow(QMainWindow):
         # Method 2: Self.Path (normal folders)
         try:
             path = window.Document.Folder.Self.Path
-            if path and not path.startswith('::'):
+            if not path.startswith('::'):
                 return path
-            # CLSID path — try getting the folder title as fallback
+            # CLSID — use title as last resort
             title = window.Document.Folder.Title
             if title:
                 return title
@@ -278,32 +319,6 @@ class MainWindow(QMainWindow):
             pass
 
         return ""
-
-    @staticmethod
-    def _is_valid_path(path):
-        """Returns True for both filesystem paths and CLSID shell paths."""
-        if not path:
-            return False
-        if path.startswith('::'):
-            return True  # CLSID shell path (This PC, etc.)
-        return os.path.exists(path)
-
-    @staticmethod
-    def _open_path(path):
-        """Open a path in Explorer — safe for CLSID and unicode paths."""
-        try:
-            if path.startswith('::'):
-                # CLSID path — use COM Shell to open correctly
-                shell = win32com.client.Dispatch("Shell.Application")
-                shell.Explore(path)
-            else:
-                subprocess.Popen(['explorer', path])
-        except Exception:
-            try:
-                shell = win32com.client.Dispatch("Shell.Application")
-                shell.Explore(path)
-            except Exception:
-                pass
 
     def get_active_explorer_data(self):
         """Captures paths and window positions for all open Explorers."""
@@ -578,7 +593,7 @@ class MainWindow(QMainWindow):
                     # Use original name to avoid emoji stacking
                     name = os.path.basename(p) or p
                     child.setText(1, p)
-                    if self._is_valid_path(p):
+                    if _is_valid_path(p):
                         child.setIcon(0, folder_icon)
                         child.setText(0, f"📁 {name}")
                     else:
