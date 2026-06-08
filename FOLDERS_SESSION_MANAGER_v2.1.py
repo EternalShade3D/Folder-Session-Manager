@@ -114,56 +114,80 @@ def _open_path(path):
 def _open_in_new_tab(path):
     """Open path in a new tab of the first existing Explorer window.
 
-    For CLSID paths (This PC, Gallery, etc.), Navigate2 with any flag
-    gets intercepted by Explorer's 'activate existing tab' logic, which
-    also repositions the window.  The only reliable way to force a NEW
-    tab is Ctrl+T (SendKeys) followed by Navigate2 without flags.
+    Step 1: find ONE visible Explorer window (exit loop immediately).
+    Step 2: activate it and send Ctrl+T + Navigate2.
+    Step 3: restore position.
 
-    For all paths: saves/restores window position to guard against any
-    repositioning during the operation.
-    Falls back to _open_path if no Explorer window is available.
+    If anything fails, returns silently — does NOT open a new window.
+    (Double-click is tab-only; right-click → Open Folder opens a new window.)
     """
+    hwnd = None
     try:
         shell = win32com.client.Dispatch("Shell.Application")
-        wshell = win32com.client.Dispatch("WScript.Shell")
         for w in shell.Windows():
             try:
-                hwnd = w.HWND
-                if hwnd and win32gui.IsWindowVisible(hwnd):
-                    # Save position before any action
-                    rect = win32gui.GetWindowRect(hwnd)
-                    origin_x, origin_y, right, bottom = rect
-                    origin_w = right - origin_x
-                    origin_h = bottom - origin_y
-
-                    # Activate window so SendKeys lands
-                    try:
-                        win32gui.SetForegroundWindow(hwnd)
-                    except Exception:
-                        pass
-                    time.sleep(0.03)
-
-                    # Ctrl+T to force a fresh tab, then navigate
-                    wshell.SendKeys("^t")
-                    time.sleep(0.1)  # brief pause for tab animation
-                    w.Navigate2(path)
-
-                    # Restore position immediately
-                    try:
-                        win32gui.SetWindowPos(
-                            hwnd, 0,
-                            origin_x, origin_y, origin_w, origin_h,
-                            0x0004 | 0x0010  # SWP_NOZORDER | SWP_NOACTIVATE
-                        )
-                    except Exception:
-                        pass
-                    return
+                h = w.HWND
+                if h and win32gui.IsWindowVisible(h):
+                    hwnd = h
+                    break
             except Exception:
                 continue
     except Exception:
         pass
-    # No Explorer window to reuse — open a new one
-    _open_path(path)
+
+    if not hwnd:
+        return  # no Explorer window to reuse — silently ignore
+
+    # Save position once
+    try:
+        rect = win32gui.GetWindowRect(hwnd)
+    except Exception:
+        rect = None
+
+    try:
+        # Activate window so SendKeys lands
+        # Work around UIPI: attach to the target window's input thread
+        current_tid = win32api.GetCurrentThreadId()
+        target_tid, target_pid = win32process.GetWindowThreadProcessId(hwnd)
+        win32process.AttachThreadInput(current_tid, target_tid, True)
+        win32gui.SetForegroundWindow(hwnd)
+        win32process.AttachThreadInput(current_tid, target_tid, False)
+    except Exception:
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+
+    try:
+        time.sleep(0.03)
+        wshell = win32com.client.Dispatch("WScript.Shell")
+        wshell.SendKeys("^t")
+        time.sleep(0.1)
+
+        # Navigate via COM on the FIRST matching window
+        shell = win32com.client.Dispatch("Shell.Application")
+        for w in shell.Windows():
+            try:
+                if w.HWND == hwnd:
+                    w.Navigate2(path)
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Restore position
+    if rect:
+        try:
+            x, y, right, bottom = rect
+            w_ = right - x
+            h_ = bottom - y
+            win32gui.SetWindowPos(
+                hwnd, 0, x, y, w_, h_,
+                0x0004 | 0x0010  # SWP_NOZORDER | SWP_NOACTIVATE
+            )
+        except Exception:
+            pass
 
 
 # ==========================================
