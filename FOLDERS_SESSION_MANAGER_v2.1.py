@@ -97,7 +97,7 @@ class CustomTreeWidget(QTreeWidget):
         open_action = QAction("📂 Open Folder", self)
         
         copy_action.triggered.connect(lambda: QApplication.clipboard().setText(item.text(1)))
-        open_action.triggered.connect(lambda: subprocess.Popen(['explorer', item.text(1)]))
+        open_action.triggered.connect(lambda: self._open_path(item.text(1)))
         
         menu.addAction(copy_action)
         menu.addAction(open_action)
@@ -105,15 +105,7 @@ class CustomTreeWidget(QTreeWidget):
 
     def on_item_double_clicked(self, item, column):
         if item and item.text(1):
-            path = item.text(1)
-            try:
-                subprocess.Popen(['explorer', path])
-            except Exception:
-                try:
-                    shell = win32com.client.Dispatch("Shell.Application")
-                    shell.Explore(path)
-                except Exception:
-                    pass
+            self._open_path(item.text(1))
 
 # ==========================================
 # MAIN APPLICATION
@@ -286,6 +278,32 @@ class MainWindow(QMainWindow):
             pass
 
         return ""
+
+    @staticmethod
+    def _is_valid_path(path):
+        """Returns True for both filesystem paths and CLSID shell paths."""
+        if not path:
+            return False
+        if path.startswith('::'):
+            return True  # CLSID shell path (This PC, etc.)
+        return os.path.exists(path)
+
+    @staticmethod
+    def _open_path(path):
+        """Open a path in Explorer — safe for CLSID and unicode paths."""
+        try:
+            if path.startswith('::'):
+                # CLSID path — use COM Shell to open correctly
+                shell = win32com.client.Dispatch("Shell.Application")
+                shell.Explore(path)
+            else:
+                subprocess.Popen(['explorer', path])
+        except Exception:
+            try:
+                shell = win32com.client.Dispatch("Shell.Application")
+                shell.Explore(path)
+            except Exception:
+                pass
 
     def get_active_explorer_data(self):
         """Captures paths and window positions for all open Explorers."""
@@ -560,7 +578,7 @@ class MainWindow(QMainWindow):
                     # Use original name to avoid emoji stacking
                     name = os.path.basename(p) or p
                     child.setText(1, p)
-                    if os.path.exists(p):
+                    if self._is_valid_path(p):
                         child.setIcon(0, folder_icon)
                         child.setText(0, f"📁 {name}")
                     else:
