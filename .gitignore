@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Environment
+.env
+venv/
+.venv/
+
+# User session data
+sessions/
+
+# Analysis / scratch docs (not for public repo)
+*_ANALYSIS.md
+
+# Backup archive (versions are in history/ via git)
+archive/
