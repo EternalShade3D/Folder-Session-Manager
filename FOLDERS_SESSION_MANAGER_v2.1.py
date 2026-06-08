@@ -114,22 +114,55 @@ def _open_path(path):
 def _open_in_new_tab(path):
     """Open path in a new tab of the first existing Explorer window.
 
-    Uses COM Navigate2 with navOpenInNewTab (0x80000000) flag so the
-    path opens as a new tab WITHOUT moving or resizing the window.
-    Falls back to _open_path (new window) if no Explorer window is available.
+    For CLSID paths (This PC, Gallery, etc.), Navigate2 with any flag
+    gets intercepted by Explorer's 'activate existing tab' logic, which
+    also repositions the window.  The only reliable way to force a NEW
+    tab is Ctrl+T (SendKeys) followed by Navigate2 without flags.
+
+    For all paths: saves/restores window position to guard against any
+    repositioning during the operation.
+    Falls back to _open_path if no Explorer window is available.
     """
     try:
         shell = win32com.client.Dispatch("Shell.Application")
+        wshell = win32com.client.Dispatch("WScript.Shell")
         for w in shell.Windows():
             try:
                 hwnd = w.HWND
                 if hwnd and win32gui.IsWindowVisible(hwnd):
-                    w.Navigate2(path, 0x80000000)
+                    # Save position before any action
+                    rect = win32gui.GetWindowRect(hwnd)
+                    origin_x, origin_y, right, bottom = rect
+                    origin_w = right - origin_x
+                    origin_h = bottom - origin_y
+
+                    # Activate window so SendKeys lands
+                    try:
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
+                    time.sleep(0.03)
+
+                    # Ctrl+T to force a fresh tab, then navigate
+                    wshell.SendKeys("^t")
+                    time.sleep(0.1)  # brief pause for tab animation
+                    w.Navigate2(path)
+
+                    # Restore position immediately
+                    try:
+                        win32gui.SetWindowPos(
+                            hwnd, 0,
+                            origin_x, origin_y, origin_w, origin_h,
+                            0x0004 | 0x0010  # SWP_NOZORDER | SWP_NOACTIVATE
+                        )
+                    except Exception:
+                        pass
                     return
             except Exception:
                 continue
     except Exception:
         pass
+    # No Explorer window to reuse — open a new one
     _open_path(path)
 
 
