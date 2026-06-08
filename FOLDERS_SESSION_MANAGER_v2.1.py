@@ -106,8 +106,14 @@ class CustomTreeWidget(QTreeWidget):
     def on_item_double_clicked(self, item, column):
         if item and item.text(1):
             path = item.text(1)
-            if os.path.exists(path):
+            try:
                 subprocess.Popen(['explorer', path])
+            except Exception:
+                try:
+                    shell = win32com.client.Dispatch("Shell.Application")
+                    shell.Explore(path)
+                except Exception:
+                    pass
 
 # ==========================================
 # MAIN APPLICATION
@@ -443,44 +449,55 @@ class MainWindow(QMainWindow):
                 
                 for p in paths[1:]:
                     if check_cancelled(): return
-                    if os.path.exists(p):
-                        success = False
-                        for retry in range(3):
-                            if check_cancelled(): return
+                    success = False
+                    for retry in range(3):
+                        if check_cancelled(): return
+                        try:
+                            try: win32gui.SetForegroundWindow(new_hwnd)
+                            except: pass
+                            wshell.AppActivate(new_hwnd)
+                            if safe_wait(t_cfg["app_activate"]): return
+
+                            # Open new tab via keyboard
+                            wshell.SendKeys("^t")
+                            wait_time = max(t_cfg["tab_animation_min"], timeout_base)
+                            if safe_wait(wait_time): return
+
+                            # Navigate via COM (unicode-safe, works with any path)
+                            nav_ok = False
                             try:
-                                try: win32gui.SetForegroundWindow(new_hwnd)
-                                except: pass
-                                wshell.AppActivate(new_hwnd)
-                                if safe_wait(t_cfg["app_activate"]): return
-                                
-                                wshell.SendKeys("^t") 
-                                wait_time = max(t_cfg["tab_animation_min"], timeout_base)
-                                if safe_wait(wait_time): return
-                                
+                                for w in shell.Windows():
+                                    if w.HWND == new_hwnd:
+                                        w.Navigate2(p)
+                                        nav_ok = True
+                                        break
+                            except Exception:
+                                pass
+
+                            if not nav_ok:
+                                # Fallback: clipboard + SendKeys
                                 try: win32gui.SetForegroundWindow(new_hwnd)
                                 except: pass
                                 wshell.AppActivate(new_hwnd)
                                 time.sleep(0.1)
-                                
-                                wshell.SendKeys("%d") 
-                                if safe_wait(t_cfg["address_bar_focus"]): return 
-                                
+                                wshell.SendKeys("%d")
+                                if safe_wait(t_cfg["address_bar_focus"]): return
                                 clipboard.setText(p)
                                 if safe_wait(t_cfg["clipboard_set"]): return
-                                wshell.SendKeys("^v") 
+                                wshell.SendKeys("^v")
                                 if safe_wait(t_cfg["paste_buffer"]): return
-                                
                                 wshell.SendKeys("{ENTER}")
-                                nav_wait = max(t_cfg["navigation_cooldown_min"], timeout_base)
-                                if safe_wait(nav_wait): return
-                                
-                                success = True
-                                break
-                            except Exception as e:
-                                print(f"Retry {retry} failed for {p}: {e}")
-                                if safe_wait(t_cfg["retry_cooldown"]): return
-                        
-                        if not success: print(f"Failed to open {p} after retries.")
+
+                            nav_wait = max(t_cfg["navigation_cooldown_min"], timeout_base)
+                            if safe_wait(nav_wait): return
+
+                            success = True
+                            break
+                        except Exception as e:
+                            print(f"Retry {retry} failed for {p}: {e}")
+                            if safe_wait(t_cfg["retry_cooldown"]): return
+
+                    if not success: print(f"Failed to open {p} after retries.")
                     
                     count += 1
                     progress.setValue(count)
