@@ -112,82 +112,8 @@ def _open_path(path):
 
 
 def _open_in_new_tab(path):
-    """Open path in a new tab of the first existing Explorer window.
-
-    Step 1: find ONE visible Explorer window (exit loop immediately).
-    Step 2: activate it and send Ctrl+T + Navigate2.
-    Step 3: restore position.
-
-    If anything fails, returns silently — does NOT open a new window.
-    (Double-click is tab-only; right-click → Open Folder opens a new window.)
-    """
-    hwnd = None
-    try:
-        shell = win32com.client.Dispatch("Shell.Application")
-        for w in shell.Windows():
-            try:
-                h = w.HWND
-                if h and win32gui.IsWindowVisible(h):
-                    hwnd = h
-                    break
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    if not hwnd:
-        return  # no Explorer window to reuse — silently ignore
-
-    # Save position once
-    try:
-        rect = win32gui.GetWindowRect(hwnd)
-    except Exception:
-        rect = None
-
-    try:
-        # Activate window so SendKeys lands
-        # Work around UIPI: attach to the target window's input thread
-        current_tid = win32api.GetCurrentThreadId()
-        target_tid, target_pid = win32process.GetWindowThreadProcessId(hwnd)
-        win32process.AttachThreadInput(current_tid, target_tid, True)
-        win32gui.SetForegroundWindow(hwnd)
-        win32process.AttachThreadInput(current_tid, target_tid, False)
-    except Exception:
-        try:
-            win32gui.SetForegroundWindow(hwnd)
-        except Exception:
-            pass
-
-    try:
-        time.sleep(0.03)
-        wshell = win32com.client.Dispatch("WScript.Shell")
-        wshell.SendKeys("^t")
-        time.sleep(0.1)
-
-        # Navigate via COM on the FIRST matching window
-        shell = win32com.client.Dispatch("Shell.Application")
-        for w in shell.Windows():
-            try:
-                if w.HWND == hwnd:
-                    w.Navigate2(path)
-                    break
-            except Exception:
-                continue
-    except Exception:
-        pass
-
-    # Restore position
-    if rect:
-        try:
-            x, y, right, bottom = rect
-            w_ = right - x
-            h_ = bottom - y
-            win32gui.SetWindowPos(
-                hwnd, 0, x, y, w_, h_,
-                0x0004 | 0x0010  # SWP_NOZORDER | SWP_NOACTIVATE
-            )
-        except Exception:
-            pass
+    """Alias — both double-click and right-click → Open use _open_path for reliability."""
+    _open_path(path)
 
 
 # ==========================================
@@ -314,7 +240,7 @@ class CustomTreeWidget(QTreeWidget):
 
     def on_item_double_clicked(self, item, column):
         if item and item.text(1):
-            _open_in_new_tab(item.text(1))
+            _open_path(item.text(1))
 
 # ==========================================
 # MAIN APPLICATION
