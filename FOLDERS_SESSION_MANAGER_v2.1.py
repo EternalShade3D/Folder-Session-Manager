@@ -5,6 +5,8 @@ import platform
 import subprocess
 import time
 import locale
+import ctypes
+from ctypes import wintypes, POINTER
 from datetime import datetime
 from urllib.parse import unquote
 
@@ -107,6 +109,81 @@ def _open_path(path):
             shell.Explore(path)
         except Exception:
             pass
+
+
+# ==========================================
+# CLSID → REAL PATH RESOLUTION
+# ==========================================
+
+def _resolve_clsid_to_path(clsid_str):
+    """Map a Windows Shell CLSID (::{xxx}) to its real filesystem path.
+
+    Uses SHGetFolderPathW for known CSIDL folders, then SHGetKnownFolderPath
+    for modern folders, then expanduser fallback as last resort.
+    """
+    clean = clsid_str.lstrip(':').upper().strip('{}')
+
+    # CLSID → CSIDL mapping for standard folders
+    # CSIDL values: https://learn.microsoft.com/en-us/windows/win32/shell/csidl
+    CLSID_TO_CSIDL = {
+        # Desktop directory (C:\Users\NAME\Desktop)
+        "5E6C858F-0E22-4760-9AFE-EA3317B67173": 0x0010,  # CSIDL_DESKTOPDIRECTORY
+        # Documents (My Documents)
+        "FDD39AD0-238F-46AF-ADB4-6C85480369C7": 0x0005,  # CSIDL_PERSONAL
+        # Pictures
+        "33E28130-4E1E-4256-9F93-63D3E1B2B1AE": 0x0027,  # CSIDL_MYPICTURES
+        # Music
+        "4BD8D571-6D19-48D3-BE97-422220080E43": 0x000D,  # CSIDL_MYMUSIC
+        # Videos
+        "18989B1D-99B5-455B-841C-AB7C74E4DDFC": 0x000E,  # CSIDL_MYVIDEO
+    }
+
+    # Try SHGetFolderPathW for known CSIDL folders
+    csidl = CLSID_TO_CSIDL.get(clean)
+    if csidl is not None:
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            if ctypes.windll.shell32.SHGetFolderPathW(0, csidl, 0, 0, buf) == 0:
+                return buf.value
+        except Exception:
+            pass
+
+    # Fallback: SHGetKnownFolderPath for folders available via KNOWNFOLDERID
+    # Downloads (no CSIDL — Vista+ only via KNOWNFOLDERID)
+    if clean == "374DE290-123F-4565-9164-39C4925E467B":
+        try:
+            from uuid import UUID
+            # KNOWNFOLDERID for Downloads = {374DE290-123F-4565-9164-39C4925E467B}
+            guid_bytes = UUID("374DE290-123F-4565-9164-39C4925E467B").bytes_le
+            rfid = (wintypes.BYTE * 16).from_buffer_copy(guid_bytes)
+            fn = ctypes.windll.shell32.SHGetKnownFolderPath
+            fn.restype = wintypes.HRESULT
+            fn.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE, POINTER(wintypes.PWSTR)]
+            ptr = wintypes.PWSTR()
+            if fn(ctypes.byref(rfid), 0, 0, ctypes.byref(ptr)) == 0:
+                path = ptr.value
+                ctypes.windll.ole32.CoTaskMemFree(ptr)
+                if path:
+                    return path
+        except Exception:
+            pass
+
+    # Last resort — use expanduser for standard sub-directories
+    home = os.path.expanduser('~')
+    EXPANDUSER_MAP = {
+        "5E6C858F-0E22-4760-9AFE-EA3317B67173": os.path.join(home, "Desktop"),
+        "FDD39AD0-238F-46AF-ADB4-6C85480369C7": os.path.join(home, "Documents"),
+        "374DE290-123F-4565-9164-39C4925E467B": os.path.join(home, "Downloads"),
+        "33E28130-4E1E-4256-9F93-63D3E1B2B1AE": os.path.join(home, "Pictures"),
+        "4BD8D571-6D19-48D3-BE97-422220080E43": os.path.join(home, "Music"),
+        "18989B1D-99B5-455B-841C-AB7C74E4DDFC": os.path.join(home, "Videos"),
+    }
+    path = EXPANDUSER_MAP.get(clean)
+    if path and os.path.exists(path):
+        return path
+
+    return None  # Not resolved — caller keeps the Title
+
 
 # ==========================================
 # CUSTOM WIDGETS
@@ -311,7 +388,10 @@ class MainWindow(QMainWindow):
             path = window.Document.Folder.Self.Path
             if not path.startswith('::'):
                 return path
-            # CLSID — use title as last resort
+            # CLSID — try to resolve to real path, fall back to title
+            resolved = _resolve_clsid_to_path(path)
+            if resolved:
+                return resolved
             title = window.Document.Folder.Title
             if title:
                 return title
@@ -426,7 +506,10 @@ class MainWindow(QMainWindow):
             paths = win_data['paths']
             if not paths: continue
 
-            first_path = paths[0] if os.path.exists(paths[0]) else os.path.expanduser("~")
+            first_path = paths[0]
+            # CLSID paths (::{xxx}) are valid shell paths, not filesystem
+            if not first_path.startswith('::') and not os.path.exists(first_path):
+                first_path = os.path.expanduser("~")
             existing_hwnds = set()
             try:
                 for w in shell.Windows():
@@ -435,7 +518,11 @@ class MainWindow(QMainWindow):
             except: pass
 
             try:
-                subprocess.Popen(['explorer.exe', '/n,', os.path.normpath(first_path)])
+                if first_path.startswith('::'):
+                    # CLSID path — open via COM Shell, not explorer.exe
+                    shell.Explore(first_path)
+                else:
+                    subprocess.Popen(['explorer.exe', '/n,', os.path.normpath(first_path)])
             except Exception as e:
                 shell.Explore(first_path)
                 
