@@ -182,7 +182,28 @@ def _resolve_clsid_to_path(clsid_str):
     if path and os.path.exists(path):
         return path
 
-    return None  # Not resolved — caller keeps the Title
+    return None  # Not resolved — caller keeps the CLSID
+
+
+def _path_display_name(path):
+    """Return user-friendly display name for a filesystem or CLSID path."""
+    if path.startswith('::'):
+        # Map known CLSIDs to friendly names
+        CLSID_TO_TITLE = {
+            "20D04FE0-3AEA-1069-A2D8-08002B30309D": "This PC",
+            "645FF040-5081-101B-9F08-00AA002F954E": "Recycle Bin",
+            "208D2C60-3AEA-1069-A2D7-08002B30309D": "Network",
+            "031E4825-7B94-4DC3-B131-E946B44C8DD5": "Libraries",
+            "E88865EA-0E1C-4E20-9AA6-EDCD0212C87C": "Gallery",
+        }
+        clean = path.lstrip(':').upper().strip('{}')
+        title = CLSID_TO_TITLE.get(clean)
+        if title:
+            return title
+        # Unknown CLSID — show short form ::{ABCD...}
+        short = clean[:8] + "…" if len(clean) > 8 else clean
+        return f"::{short}"
+    return os.path.basename(path) or path
 
 
 # ==========================================
@@ -388,13 +409,13 @@ class MainWindow(QMainWindow):
             path = window.Document.Folder.Self.Path
             if not path.startswith('::'):
                 return path
-            # CLSID — try to resolve to real path, fall back to title
+            # CLSID — try to resolve to real path, fall back to CLSID itself
             resolved = _resolve_clsid_to_path(path)
             if resolved:
                 return resolved
-            title = window.Document.Folder.Title
-            if title:
-                return title
+            # Virtual folder (Recycle Bin, Network, Libraries, Gallery, This PC) —
+            # save the CLSID so we can reopen it via shell.Explore() later
+            return path
         except Exception:
             pass
 
@@ -677,9 +698,8 @@ class MainWindow(QMainWindow):
                 parent.setExpanded(True)
                 for p in win['paths']:
                     child = QTreeWidgetItem(parent)
-                    # Use original name to avoid emoji stacking
-                    name = os.path.basename(p) or p
                     child.setText(1, p)
+                    name = _path_display_name(p)
                     if _is_valid_path(p):
                         child.setIcon(0, folder_icon)
                         child.setText(0, f"📁 {name}")
