@@ -111,6 +111,28 @@ def _open_path(path):
             pass
 
 
+def _open_in_new_tab(path):
+    """Open path in a new tab of the first existing Explorer window.
+
+    Uses COM Navigate2 with navOpenInNewTab (0x80000000) flag so the
+    path opens as a new tab WITHOUT moving or resizing the window.
+    Falls back to _open_path (new window) if no Explorer window is available.
+    """
+    try:
+        shell = win32com.client.Dispatch("Shell.Application")
+        for w in shell.Windows():
+            try:
+                hwnd = w.HWND
+                if hwnd and win32gui.IsWindowVisible(hwnd):
+                    w.Navigate2(path, 0x80000000)
+                    return
+            except Exception:
+                continue
+    except Exception:
+        pass
+    _open_path(path)
+
+
 # ==========================================
 # CLSID → REAL PATH RESOLUTION
 # ==========================================
@@ -235,7 +257,7 @@ class CustomTreeWidget(QTreeWidget):
 
     def on_item_double_clicked(self, item, column):
         if item and item.text(1):
-            _open_path(item.text(1))
+            _open_in_new_tab(item.text(1))
 
 # ==========================================
 # MAIN APPLICATION
