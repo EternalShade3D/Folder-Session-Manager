@@ -543,9 +543,15 @@ class MainWindow(QMainWindow):
                     # CLSID path — open via COM Shell, not explorer.exe
                     shell.Explore(first_path)
                 else:
-                    subprocess.Popen(['explorer.exe', '/n,', os.path.normpath(first_path)])
+                    # /separate forces a new process — prevents Explorer from
+                    # reusing an existing window that already shows this path,
+                    # which would override the saved window position/size
+                    subprocess.Popen(['explorer.exe', '/separate', '/n,', os.path.normpath(first_path)])
             except Exception as e:
-                shell.Explore(first_path)
+                try:
+                    subprocess.Popen(['explorer.exe', '/separate', '/n,', os.path.normpath(first_path)])
+                except Exception:
+                    shell.Explore(first_path)
                 
             if safe_wait(t_cfg["primary_window_spawn"]): return
 
