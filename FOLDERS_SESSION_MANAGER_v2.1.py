@@ -5,6 +5,7 @@ import platform
 import subprocess
 import time
 from datetime import datetime
+from urllib.parse import unquote
 
 # Windows-specific libraries
 try:
@@ -249,6 +250,37 @@ class MainWindow(QMainWindow):
 
     # --- EXPLORER INTERACTION LOGIC ---
 
+    @staticmethod
+    def _resolve_explorer_path(window):
+        """Get the real filesystem path from an Explorer window.
+
+        Fixes CLSID paths (::{xxxx}) returned by Self.Path for library
+        folders like Documents, Downloads, Pictures, etc. by reading
+        LocationURL (file:/// format) instead.
+        """
+        # Method 1: LocationURL (works for library folders)
+        try:
+            url = window.LocationURL
+            if url and url.startswith('file:///'):
+                decoded = unquote(url[8:])
+                return decoded.replace('/', '\\')
+        except Exception:
+            pass
+
+        # Method 2: Self.Path (normal folders)
+        try:
+            path = window.Document.Folder.Self.Path
+            if path and not path.startswith('::'):
+                return path
+            # CLSID path — try getting the folder title as fallback
+            title = window.Document.Folder.Title
+            if title:
+                return title
+        except Exception:
+            pass
+
+        return ""
+
     def get_active_explorer_data(self):
         """Captures paths and window positions for all open Explorers."""
         windows = []
@@ -257,7 +289,9 @@ class MainWindow(QMainWindow):
             hwnd_map = {}
             for window in shell.Windows():
                 try:
-                    path = window.Document.Folder.Self.Path
+                    path = self._resolve_explorer_path(window)
+                    if not path:
+                        continue
                     hwnd = window.HWND
                     if hwnd not in hwnd_map:
                         hwnd_map[hwnd] = []
@@ -377,7 +411,7 @@ class MainWindow(QMainWindow):
                         try:
                             w_hwnd = w.HWND
                             if w_hwnd not in existing_hwnds and w_hwnd not in restored_hwnds:
-                                if w.Document.Folder.Self.Path: 
+                                if self._resolve_explorer_path(w): 
                                     new_hwnd = w_hwnd
                                     break
                         except: pass
@@ -391,7 +425,7 @@ class MainWindow(QMainWindow):
                     for w in fresh_shell.Windows():
                         try:
                             w_hwnd = w.HWND
-                            if w_hwnd not in restored_hwnds and paths_match(w.Document.Folder.Self.Path, first_path):
+                            if w_hwnd not in restored_hwnds and paths_match(self._resolve_explorer_path(w), first_path):
                                 new_hwnd = w_hwnd
                                 break
                         except: pass
