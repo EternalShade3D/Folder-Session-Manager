@@ -18,6 +18,7 @@ try:
     import win32api
     import pywintypes
     import win32con
+    import win32clipboard
 except ImportError:
     print("Warning: Missing 'pywin32' library. Install it with: pip install pywin32")
 
@@ -107,6 +108,26 @@ def _is_valid_path(path):
         return os.path.exists(path)
     except Exception:
         return False
+
+def _set_clipboard_text(text):
+    """Write the clipboard without Qt's OLE clipboard.
+
+    pywinauto's UIA backend needs COM in multithreaded mode, so Qt's
+    OleInitialize() fails on startup (0x80010106) and
+    QApplication.clipboard() silently stops writing. The Win32 clipboard
+    API does not care about the COM apartment, so pasting still works.
+    Returns True on success, False so the caller can fall back to Qt."""
+    try:
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text)
+        finally:
+            win32clipboard.CloseClipboard()
+        return True
+    except Exception:
+        return False
+
 
 def _open_path(path):
     """Open path in Explorer — safe for CLSID (This PC) and unicode paths."""
@@ -547,7 +568,7 @@ class CustomTreeWidget(QTreeWidget):
         copy_action = QAction("📋 Copy Path", self)
         open_action = QAction("📂 Open Folder", self)
         
-        copy_action.triggered.connect(lambda: QApplication.clipboard().setText(item.text(1)))
+        copy_action.triggered.connect(lambda: _set_clipboard_text(item.text(1)) or QApplication.clipboard().setText(item.text(1)))
         open_action.triggered.connect(lambda: _open_path(item.text(1)))
         
         menu.addAction(copy_action)
@@ -1036,7 +1057,7 @@ class MainWindow(QMainWindow):
                     time.sleep(0.1)
                     wshell.SendKeys("%d")
                     if safe_wait(t_cfg["address_bar_focus"]): return False
-                    clipboard.setText(path)
+                    if not _set_clipboard_text(path): clipboard.setText(path)
                     if safe_wait(t_cfg["clipboard_set"]): return False
                     wshell.SendKeys("^v")
                     if safe_wait(t_cfg["paste_buffer"]): return False

@@ -13,6 +13,7 @@ All notable changes to this project, in reverse chronological order.
 
 ### Changed
 - Transient UIA failures during Explorer redraws are retried (3 attempts) instead of dropping the window.
+- **Clipboard write via `win32clipboard`** — pywinauto's UIA backend needs COM in multithreaded mode, which makes Qt's `OleInitialize()` fail (0x80010106) and `QApplication.clipboard()` silently stop writing. Verified: with pywinauto imported, `setText()` does not reach the clipboard. The Win32 clipboard API is apartment-independent, so the paste path now writes through it and falls back to Qt.
 - Breadcrumb drive nodes are converted to drive letters (`Local Disk (C:)` becomes `C:`).
 
 ### Known limitation
