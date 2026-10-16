@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import platform
 import subprocess
 import time
@@ -19,6 +20,12 @@ try:
     import win32con
 except ImportError:
     print("Warning: Missing 'pywin32' library. Install it with: pip install pywin32")
+
+# UI Automation is required for reliable tab insertion (see _uia module below).
+try:
+    from pywinauto import Desktop as _UiaDesktop
+except ImportError:
+    _UiaDesktop = None
 
 from PySide6.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QTreeWidgetItem,
                                QListWidget, QListWidgetItem, QMenu, QMessageBox, QDialog,
@@ -114,6 +121,227 @@ def _open_path(path):
 def _open_in_new_tab(path):
     """Alias — both double-click and right-click → Open use _open_path for reliability."""
     _open_path(path)
+
+
+# ==========================================
+# TAB INSERTION VIA UI AUTOMATION
+# ==========================================
+#
+# Why UIA instead of the old keyboard macro (Ctrl+T / Alt+D / paste / Enter):
+#
+#   * Ctrl+T via SendKeys needs the target window to hold the foreground.
+#     Windows' foreground lock makes that unreliable, and any other app
+#     grabbing focus (chat apps, launchers) makes the keystroke land in the
+#     WRONG window — the new tab then appears in someone else's window.
+#   * COM Navigate2 CANNOT open a path in a new tab. Verified failures:
+#       - Navigate2(path)             -> replaces the active tab
+#       - Navigate2(path, 0x80000000) -> navOpenInNewTab is ignored
+#       - `explorer.exe a b c`        -> one window, no tabs
+#       - PostMessage(WM_KEYDOWN)     -> Explorer ignores synthetic keys
+#     Those all produced a window full of duplicate tabs.
+#   * Invoking the "Add New Tab" button (automation_id "AddButton") creates a
+#     tab with no keyboard and no focus change, and typing into the tab's own
+#     address bar (class TextBox) targets that tab specifically.
+#
+# Verification uses the UIA tab label. COM LocationURL returns a stale value
+# for every tab in a window and must never be used to check tab contents.
+
+_UIA_MISSING_MSG = ("pywinauto is required to restore tabs reliably. "
+                    "Install it with: pip install pywinauto")
+
+
+def _uia_retry(fn, tries=6, delay=0.6):
+    """UIA/COM calls raise transient COMError while Explorer redraws."""
+    last = None
+    for _ in range(tries):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            time.sleep(delay)
+    raise last
+
+
+def _uia_win(hwnd):
+    return _UiaDesktop(backend="uia").window(handle=hwnd)
+
+
+def _tab_labels(hwnd):
+    """Tab labels as Explorer itself shows them (may be truncated)."""
+    if _UiaDesktop is None:
+        return []
+    try:
+        return _uia_retry(lambda: [t.window_text() for t in
+                                   _uia_win(hwnd).descendants(control_type="TabItem")])
+    except Exception:
+        return []
+
+
+def _tab_count(hwnd):
+    """Tabs from the title bar: 'X and 3 more tabs' -> 4, 'X' -> 1."""
+    try:
+        title = win32gui.GetWindowText(hwnd)
+    except Exception:
+        return -1
+    m = re.search(r'and (\d+) more tab', title)
+    return int(m.group(1)) + 1 if m else 1
+
+
+def _add_tab_button(hwnd):
+    for c in _uia_win(hwnd).descendants(control_type="Button"):
+        try:
+            if c.automation_id() == "AddButton":
+                return c
+        except Exception:
+            continue
+    return None
+
+
+def _address_bar(hwnd):
+    """The address bar is the Edit whose class is TextBox (not the
+    System.ItemNameDisplay property edits belonging to the file list)."""
+    for e in _uia_win(hwnd).descendants(control_type="Edit"):
+        try:
+            if e.element_info.class_name == "TextBox":
+                return e
+        except Exception:
+            continue
+    return None
+
+
+def _expected_label(path):
+    """Explorer's tab label for a path is its folder name."""
+    name = os.path.basename(os.path.normpath(path).rstrip('\\/'))
+    return name or path
+
+
+def _tab_has_path(hwnd, index, path):
+    """True when tab `index` shows `path`. Compares the UIA label; long folder
+    names are truncated by Explorer, so also accept a label the path starts with."""
+    labels = _tab_labels(hwnd)
+    if index >= len(labels):
+        return False
+    label = labels[index]
+    expected = _expected_label(path)
+    return label == expected or expected.startswith(label)
+
+
+def _insert_tab(hwnd, path, cancel_check=None, wait=0.35):
+    """Create one tab in `hwnd` showing `path`.
+
+    Returns True only when the tab count grew AND the tab really holds `path`.
+    Retries a few times: a lost keystroke lands the tab on 'This PC' or the
+    previous folder, which is why the result is verified rather than assumed.
+    """
+    if _UiaDesktop is None:
+        return False
+
+    for _ in range(4):
+        if cancel_check and cancel_check():
+            return False
+        base = _tab_count(hwnd)
+        try:
+            btn = _uia_retry(lambda: _add_tab_button(hwnd))
+        except Exception:
+            time.sleep(0.5)
+            continue
+        if btn is None:
+            time.sleep(0.5)
+            continue
+
+        try:
+            # invoke() targets the control directly: no mouse coordinates and
+            # no focus change, so another app cannot misdirect it.
+            btn.invoke()
+        except Exception:
+            time.sleep(0.4)
+            continue
+
+        created = False
+        for _ in range(15):
+            if cancel_check and cancel_check():
+                return False
+            time.sleep(0.2)
+            if _tab_count(hwnd) > base:
+                created = True
+                break
+        if not created:
+            continue
+
+        time.sleep(0.9)
+        try:
+            edit = _uia_retry(lambda: _address_bar(hwnd))
+        except Exception:
+            return False
+        if edit is None:
+            return False
+        try:
+            edit.set_focus()
+        except Exception:
+            pass
+        time.sleep(0.4)
+        try:
+            edit.type_keys(path, with_spaces=True, with_tabs=False, with_newlines=False)
+            time.sleep(0.4)
+            edit.type_keys("{ENTER}")
+        except Exception:
+            return False
+        time.sleep(1.7)
+
+        index = _tab_count(hwnd) - 1
+        if _tab_has_path(hwnd, index, path):
+            return True
+        # Tab exists but holds the wrong folder: try again in the same slot.
+        for _ in range(6):
+            if cancel_check and cancel_check():
+                return False
+            time.sleep(0.35)
+            if _tab_has_path(hwnd, index, path):
+                return True
+
+    return False
+
+
+def _refill_tab(hwnd, index, path, cancel_check=None):
+    """Point an EXISTING tab at `path` (used to repair a wrong tab)."""
+    if _UiaDesktop is None:
+        return False
+    try:
+        items = _uia_retry(lambda: list(_uia_win(hwnd).descendants(control_type="TabItem")))
+    except Exception:
+        return False
+    if index >= len(items):
+        return False
+    for attempt in range(3):
+        if cancel_check and cancel_check():
+            return False
+        try:
+            items[index].select()
+        except Exception:
+            pass
+        time.sleep(1.0)
+        try:
+            edit = _uia_retry(lambda: _address_bar(hwnd))
+        except Exception:
+            return False
+        if edit is None:
+            return False
+        try:
+            edit.set_focus()
+            time.sleep(0.5)
+            edit.type_keys(path, with_spaces=True, with_tabs=False, with_newlines=False)
+            time.sleep(0.4)
+            edit.type_keys("{ENTER}")
+        except Exception:
+            pass
+        time.sleep(2.0)
+        for _ in range(6):
+            if cancel_check and cancel_check():
+                return False
+            time.sleep(0.35)
+            if _tab_has_path(hwnd, index, path):
+                return True
+    return False
 
 
 # ==========================================
@@ -503,7 +731,11 @@ class MainWindow(QMainWindow):
         
         count = 0
         skipped_groups = 0
+        failed_paths = []
         timeout_base = max(1, self.settings.get("timeout", 10)) / 10.0
+
+        if _UiaDesktop is None and hasattr(self, 'statusbar'):
+            self.statusbar.showMessage(_UIA_MISSING_MSG, 10000)
 
         def check_cancelled():
             if progress.wasCanceled() or (win32api.GetAsyncKeyState(0x1B) & 0x8000):
@@ -591,68 +823,51 @@ class MainWindow(QMainWindow):
 
             if new_hwnd:
                 restored_hwnds.add(new_hwnd)
+                # A minimized window exposes no UIA tree, so tabs cannot be
+                # created in it. Park it somewhere valid, do the work, and
+                # re-minimize afterwards if the session had it minimized.
+                was_minimized = (win_data['x'] <= -30000 and win_data['y'] <= -30000)
                 try:
                     if win32gui.IsIconic(new_hwnd):
                         win32gui.ShowWindow(new_hwnd, win32con.SW_RESTORE)
-                    win32gui.SetForegroundWindow(new_hwnd)
-                    win32gui.MoveWindow(new_hwnd, win_data['x'], win_data['y'], 
-                                       win_data['width'], win_data['height'], True)
                 except Exception: pass
-                
-                for p in paths[1:]:
+                try:
+                    if was_minimized:
+                        win32gui.MoveWindow(new_hwnd, 60, 60, 1294, 703, True)
+                    else:
+                        win32gui.MoveWindow(new_hwnd, win_data['x'], win_data['y'],
+                                           win_data['width'], win_data['height'], True)
+                except Exception: pass
+                bad_tabs = []
+                for idx_p, p in enumerate(paths[1:], start=1):
                     if check_cancelled(): return
-                    success = False
-                    for retry in range(3):
-                        if check_cancelled(): return
-                        try:
-                            try: win32gui.SetForegroundWindow(new_hwnd)
-                            except: pass
-                            wshell.AppActivate(new_hwnd)
-                            if safe_wait(t_cfg["app_activate"]): return
+                    # Insert via UI Automation: creates the tab without the
+                    # keyboard (so focus theft can't misdirect it) and types
+                    # the path into that tab's own address bar. Verified by
+                    # reading the tab label back — a tab that landed on
+                    # 'This PC' is detected and retried/repaired.
+                    if _UiaDesktop is None:
+                        # pywinauto unavailable: fall back to the old macro.
+                        if not self._legacy_insert_tab(new_hwnd, p, wshell,
+                                                       clipboard, check_cancelled,
+                                                       safe_wait, t_cfg, timeout_base):
+                            bad_tabs.append(p)
+                    elif not _insert_tab(new_hwnd, p, cancel_check=check_cancelled):
+                        # Tab exists but is wrong -> repair it in place.
+                        if not _refill_tab(new_hwnd, idx_p, p, cancel_check=check_cancelled):
+                            bad_tabs.append(p)
 
-                            # Open new tab via keyboard
-                            wshell.SendKeys("^t")
-                            wait_time = max(t_cfg["tab_animation_min"], timeout_base)
-                            if safe_wait(wait_time): return
-
-                            # Navigate via COM (unicode-safe, works with any path)
-                            nav_ok = False
-                            try:
-                                for w in shell.Windows():
-                                    if w.HWND == new_hwnd:
-                                        w.Navigate2(p)
-                                        nav_ok = True
-                                        break
-                            except Exception:
-                                pass
-
-                            if not nav_ok:
-                                # Fallback: clipboard + SendKeys
-                                try: win32gui.SetForegroundWindow(new_hwnd)
-                                except: pass
-                                wshell.AppActivate(new_hwnd)
-                                time.sleep(0.1)
-                                wshell.SendKeys("%d")
-                                if safe_wait(t_cfg["address_bar_focus"]): return
-                                clipboard.setText(p)
-                                if safe_wait(t_cfg["clipboard_set"]): return
-                                wshell.SendKeys("^v")
-                                if safe_wait(t_cfg["paste_buffer"]): return
-                                wshell.SendKeys("{ENTER}")
-
-                            nav_wait = max(t_cfg["navigation_cooldown_min"], timeout_base)
-                            if safe_wait(nav_wait): return
-
-                            success = True
-                            break
-                        except Exception as e:
-                            print(f"Retry {retry} failed for {p}: {e}")
-                            if safe_wait(t_cfg["retry_cooldown"]): return
-
-                    if not success: print(f"Failed to open {p} after retries.")
-                    
                     count += 1
                     progress.setValue(count)
+
+                if bad_tabs:
+                    failed_paths.extend(bad_tabs)
+
+                if was_minimized:
+                    try:
+                        win32gui.ShowWindow(new_hwnd, win32con.SW_MINIMIZE)
+                    except Exception: pass
+
             else:
                 skipped_groups += 1
                 count += len(paths) - 1
@@ -660,13 +875,68 @@ class MainWindow(QMainWindow):
             count += 1
             progress.setValue(count)
             if safe_wait(t_cfg["window_group_cooldown"]): return
-        
+
         progress.close()
         if hasattr(self, 'statusbar'):
-            if skipped_groups > 0:
+            if failed_paths:
+                n = len(failed_paths)
+                self.statusbar.showMessage(
+                    f"⚠️ Restoration finished with {n} tab(s) wrong: "
+                    f"{', '.join(os.path.basename(x) for x in failed_paths[:4])}", 10000)
+            elif skipped_groups > 0:
                 self.statusbar.showMessage(f"⚠️ Restoration finished with {skipped_groups} skipped groups.", 8000)
             else:
                 self.statusbar.showMessage("✨ Restoration Complete", 5000)
+
+    def _legacy_insert_tab(self, hwnd, path, wshell, clipboard, check_cancelled,
+                           safe_wait, t_cfg, timeout_base):
+        """Keyboard fallback used only when pywinauto is not installed.
+        Kept because it is the historical behaviour, but it is unreliable:
+        Ctrl+T needs the foreground and the Windows foreground lock can send
+        the keystroke to a different window.
+        """
+        for retry in range(3):
+            if check_cancelled(): return False
+            try:
+                try: win32gui.SetForegroundWindow(hwnd)
+                except Exception: pass
+                try: wshell.AppActivate(hwnd)
+                except Exception: pass
+                if safe_wait(t_cfg["app_activate"]): return False
+
+                wshell.SendKeys("^t")
+                if safe_wait(max(t_cfg["tab_animation_min"], timeout_base)): return False
+
+                nav_ok = False
+                try:
+                    for w in win32com.client.Dispatch("Shell.Application").Windows():
+                        if w.HWND == hwnd:
+                            w.Navigate2(path)
+                            nav_ok = True
+                            break
+                except Exception:
+                    pass
+
+                if not nav_ok:
+                    try: win32gui.SetForegroundWindow(hwnd)
+                    except Exception: pass
+                    try: wshell.AppActivate(hwnd)
+                    except Exception: pass
+                    time.sleep(0.1)
+                    wshell.SendKeys("%d")
+                    if safe_wait(t_cfg["address_bar_focus"]): return False
+                    clipboard.setText(path)
+                    if safe_wait(t_cfg["clipboard_set"]): return False
+                    wshell.SendKeys("^v")
+                    if safe_wait(t_cfg["paste_buffer"]): return False
+                    wshell.SendKeys("{ENTER}")
+
+                if safe_wait(max(t_cfg["navigation_cooldown_min"], timeout_base)): return False
+                return True
+            except Exception as e:
+                print(f"Legacy tab retry {retry} failed for {path}: {e}")
+                if safe_wait(t_cfg["retry_cooldown"]): return False
+        return False
 
     # --- UI SUPPORT METHODS ---
 

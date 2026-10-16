@@ -9,7 +9,7 @@ Save and restore File Explorer window layouts — paths, positions, sizes, and o
 
 ## How It Works
 
-1. **Save** — Open several Explorer windows with the folders you need, click **Save Session**. The app captures every window's paths, position, and size via COM
+1. **Save** — Open several Explorer windows with the folders you need, click **Save Session**. The app captures every window's paths, position, and size via COM, and falls back to UI Automation when COM cannot see the windows (Explorer often does not register them in the Running Object Table)
 2. **Auto-save** — Click **Auto-save** in the status bar to save Explorer state every 5 minutes automatically
 3. **Browse** — View saved sessions with path preview, search by folder name, expand/collapse tree
 4. **Restore** — Select a session, click **Restore**. The app reopens Explorer windows at saved positions with all tabs restored via keyboard macro automation
@@ -18,7 +18,7 @@ Save and restore File Explorer window layouts — paths, positions, sizes, and o
 ## Features
 
 - **Auto-save** — periodic save (QTimer, default 5 min), toggle from status bar
-- **Save session** — capture all open Explorer windows (paths, tabs, position, size)
+- **Save session** — capture all open Explorer windows (paths, tabs, position, size), with a UIA fallback when COM sees nothing
 - **Restore session** — reopen windows at saved positions with all folder tabs via keystroke simulation
 - **Preview** — tree view of saved sessions with window groups and paths
 - **Search/filter** — type to filter paths across the preview tree
@@ -39,15 +39,17 @@ Save and restore File Explorer window layouts — paths, positions, sizes, and o
 - Python 3.10+
 - PySide6
 - pywin32
+- comtypes (UIA fallback for reading windows)
+- pywinauto (UIA tab insertion)
 
 ```bash
-pip install PySide6 pywin32
+pip install PySide6 pywin32 comtypes pywinauto
 ```
 
 ## Quick Start
 
 ```bash
-python FOLDERS_SESSION_MANAGER_v2.1.py
+python FOLDERS_SESSION_MANAGER_v2.2.py
 ```
 
 1. Open a few File Explorer windows to different folders
@@ -57,10 +59,11 @@ python FOLDERS_SESSION_MANAGER_v2.1.py
 
 ## Project History
 
-The full evolution from v0.1 to v2.1 is in [`CHANGELOG.md`](CHANGELOG.md) and [`history/`](history/).
+The full evolution from v0.1 to v2.2 is in [`CHANGELOG.md`](CHANGELOG.md) and [`history/`](history/).
 
 | Version | Highlights |
 |---------|-----------|
+| **v2.2** | UIA fallback when COM sees no windows, minimized-window notice |
 | **v2.1** | Timing macros, keyboard macro tab insertion, abort-safe restoration |
 | **v2.0** | Compact window sizing |
 | **v1.9** | Graceful pywin32 import, streamlined code |

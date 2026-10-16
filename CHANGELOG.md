@@ -4,7 +4,23 @@ All notable changes to this project, in reverse chronological order.
 
 ---
 
-## v2.1 (Latest)
+## v2.2 (Latest)
+
+### Added
+- **UIA fallback for reading open windows** — `Shell.Application.Windows()` only lists Explorer windows that registered in the Running Object Table, so COM can report zero windows while several are open. UIA resolves each window from its handle and reads the active tab's path from the breadcrumb bar, so anything COM missed is still saved.
+- **Minimized-window notice** — UIA exposes no tree for a minimized window, so when only minimized windows exist the app says that instead of claiming no windows were found.
+- `source` field on saved entries records which route produced the window (`com` or `uia`).
+
+### Changed
+- Transient UIA failures during Explorer redraws are retried (3 attempts) instead of dropping the window.
+- Breadcrumb drive nodes are converted to drive letters (`Local Disk (C:)` becomes `C:`).
+
+### Known limitation
+- A minimized Explorer window exposes no UIA tree, so its path can only come from COM. Un-minimize a window before saving if you need its folders.
+
+---
+
+## v2.1
 
 ### Added
 - **Auto-save** — QTimer-based periodic save, toggle from status bar (default 5 min), saves immediately on enable
