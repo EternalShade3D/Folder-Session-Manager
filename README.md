@@ -48,6 +48,9 @@ pip install PySide6 pywin32 comtypes pywinauto
 
 ## Quick Start
 
+Double-click `run_folder_session_manager.bat` (it picks the Python that has the
+required modules), or run:
+
 ```bash
 python FOLDERS_SESSION_MANAGER_v2.2.py
 ```
