@@ -344,8 +344,12 @@ def _insert_tab(hwnd, path, cancel_check=None, wait=0.35):
     """
     if _UiaDesktop is None:
         return False
+    # A folder that no longer exists can never be verified, so retrying
+    # for ~30 seconds on it is what made the app look stuck.
+    if not _is_valid_path(path):
+        return False
 
-    for _ in range(4):
+    for _ in range(3):
         if cancel_check and cancel_check():
             return False
         base = _tab_count(hwnd)
@@ -401,7 +405,7 @@ def _insert_tab(hwnd, path, cancel_check=None, wait=0.35):
         if _tab_has_path(hwnd, index, path):
             return True
         # Tab exists but holds the wrong folder: try again in the same slot.
-        for _ in range(6):
+        for _ in range(3):
             if cancel_check and cancel_check():
                 return False
             time.sleep(0.35)
@@ -414,6 +418,8 @@ def _insert_tab(hwnd, path, cancel_check=None, wait=0.35):
 def _refill_tab(hwnd, index, path, cancel_check=None):
     """Point an EXISTING tab at `path` (used to repair a wrong tab)."""
     if _UiaDesktop is None:
+        return False
+    if not _is_valid_path(path):
         return False
     try:
         items = _uia_retry(lambda: list(_uia_win(hwnd).descendants(control_type="TabItem")))
@@ -444,7 +450,7 @@ def _refill_tab(hwnd, index, path, cancel_check=None):
         except Exception:
             pass
         time.sleep(2.0)
-        for _ in range(6):
+        for _ in range(3):
             if cancel_check and cancel_check():
                 return False
             time.sleep(0.35)
@@ -864,6 +870,7 @@ class MainWindow(QMainWindow):
         count = 0
         skipped_groups = 0
         failed_paths = []
+        dead_paths = []
         timeout_base = max(1, self.settings.get("timeout", 10)) / 10.0
 
         if _UiaDesktop is None and hasattr(self, 'statusbar'):
@@ -899,13 +906,24 @@ class MainWindow(QMainWindow):
             first_path = paths[0]
             # CLSID paths (::{xxx}) are valid shell paths, not filesystem
             if not first_path.startswith('::') and not os.path.exists(first_path):
-                first_path = os.path.expanduser("~")
+                dead_paths.append(first_path)
+                # Folder is gone: open the nearest folder that still exists
+                # instead of jumping to the home folder.
+                parent = os.path.dirname(os.path.normpath(first_path))
+                first_path = parent if parent and os.path.exists(parent) else os.path.expanduser("~")
             existing_hwnds = set()
             try:
                 for w in shell.Windows():
                     try: existing_hwnds.add(w.HWND)
                     except: pass
             except: pass
+            # COM only lists windows that registered in the ROT, so it can
+            # see nothing while windows are open. UIA sees them all.
+            try:
+                for w in _uia_explorer_windows():
+                    existing_hwnds.add(w["hwnd"])
+            except Exception:
+                pass
 
             try:
                 if first_path.startswith('::'):
@@ -925,7 +943,7 @@ class MainWindow(QMainWindow):
             if safe_wait(t_cfg["primary_window_spawn"]): return
 
             new_hwnd = None
-            for _ in range(t_cfg["poll_attempts"]): 
+            for attempt in range(t_cfg["poll_attempts"]):
                 if check_cancelled(): return
                 try:
                     fresh_shell = win32com.client.Dispatch("Shell.Application")
@@ -939,6 +957,17 @@ class MainWindow(QMainWindow):
                         except: pass
                     if new_hwnd: break
                 except: pass
+                # UIA is heavier than COM, so only consult it every few polls.
+                if attempt % 5 == 0:
+                    try:
+                        for w in _uia_explorer_windows():
+                            if (w["hwnd"] not in existing_hwnds and
+                                    w["hwnd"] not in restored_hwnds and w["path"]):
+                                new_hwnd = w["hwnd"]
+                                break
+                    except Exception:
+                        pass
+                    if new_hwnd: break
                 if safe_wait(t_cfg["poll_interval"]): return
 
             if not new_hwnd:
@@ -952,6 +981,14 @@ class MainWindow(QMainWindow):
                                 break
                         except: pass
                 except: pass
+            if not new_hwnd:
+                try:
+                    for w in _uia_explorer_windows():
+                        if w["hwnd"] not in restored_hwnds and paths_match(w["path"], first_path):
+                            new_hwnd = w["hwnd"]
+                            break
+                except Exception:
+                    pass
 
             if new_hwnd:
                 restored_hwnds.add(new_hwnd)
@@ -973,6 +1010,12 @@ class MainWindow(QMainWindow):
                 bad_tabs = []
                 for idx_p, p in enumerate(paths[1:], start=1):
                     if check_cancelled(): return
+                    # Dead folder: no typing, no retry, just record it.
+                    if not _is_valid_path(p):
+                        dead_paths.append(p)
+                        count += 1
+                        progress.setValue(count)
+                        continue
                     # Insert via UI Automation: creates the tab without the
                     # keyboard (so focus theft can't misdirect it) and types
                     # the path into that tab's own address bar. Verified by
@@ -1010,7 +1053,11 @@ class MainWindow(QMainWindow):
 
         progress.close()
         if hasattr(self, 'statusbar'):
-            if failed_paths:
+            if dead_paths:
+                self.statusbar.showMessage(
+                    f"⚠️ {len(dead_paths)} folder(s) no longer exist and were skipped: " 
+                    f"{', '.join(os.path.basename(x) for x in dead_paths[:4])}", 10000)
+            elif failed_paths:
                 n = len(failed_paths)
                 self.statusbar.showMessage(
                     f"⚠️ Restoration finished with {n} tab(s) wrong: "

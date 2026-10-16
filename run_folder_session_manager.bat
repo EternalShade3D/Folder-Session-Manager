@@ -2,7 +2,15 @@
 rem Folder Session Manager launcher.
 rem Uses the Python that has PySide6, pywin32, comtypes and pywinauto.
 set "PY=C:\Python314\python.exe"
-set "APP=C:\AI_WORKSPACE\FOLDERS_SESSION_MANAGER\FOLDERS_SESSION_MANAGER_v2.2.py"
+set "DIR=C:\AI_WORKSPACE\FOLDERS_SESSION_MANAGER"
+rem Picks the newest version file in the folder.
+set "APP="
+for /f "delims=" %%f in ('dir /b /o:-n "%DIR%\FOLDERS_SESSION_MANAGER_v*.py"') do if not defined APP set "APP=%DIR%\%%f"
+if not defined APP (
+    echo No FOLDERS_SESSION_MANAGER_v*.py found in %DIR%
+    pause
+    exit /b 1
+)
 
 rem Hides the two startup console messages (OleInitialize and DPI awareness).
 set "QT_LOGGING_RULES=qt.qpa.window=false;qt.default=false"

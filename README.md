@@ -52,7 +52,7 @@ Double-click `run_folder_session_manager.bat` (it picks the Python that has the
 required modules), or run:
 
 ```bash
-python FOLDERS_SESSION_MANAGER_v2.2.py
+python FOLDERS_SESSION_MANAGER_v2.3.py
 ```
 
 1. Open a few File Explorer windows to different folders
@@ -62,10 +62,11 @@ python FOLDERS_SESSION_MANAGER_v2.2.py
 
 ## Project History
 
-The full evolution from v0.1 to v2.2 is in [`CHANGELOG.md`](CHANGELOG.md) and [`history/`](history/).
+The full evolution from v0.1 to v2.3 is in [`CHANGELOG.md`](CHANGELOG.md) and [`history/`](history/).
 
 | Version | Highlights |
 |---------|-----------|
+| **v2.3** | Restore skips folders that no longer exist, finds windows through UIA |
 | **v2.2** | UIA fallback when COM sees no windows, minimized-window notice |
 | **v2.1** | Timing macros, keyboard macro tab insertion, abort-safe restoration |
 | **v2.0** | Compact window sizing |

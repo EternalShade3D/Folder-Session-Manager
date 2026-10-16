@@ -4,7 +4,20 @@ All notable changes to this project, in reverse chronological order.
 
 ---
 
-## v2.2 (Latest)
+## v2.3 (Latest)
+
+### Fixed
+- **Restore no longer loops on folders that no longer exist.** A dead folder can never be verified, so the old retry logic spent about 12 seconds per attempt on it (up to 4 attempts plus a repair pass), which is what looked like the app being stuck. Dead folders are now recorded and skipped with no typing and no retry.
+- **Restore finds the window through UIA when COM sees none.** `Shell.Application.Windows()` only lists windows registered in the Running Object Table, so on this machine it reports zero windows and restore could never attach to the window it had just opened. The poll loop and the match fallback now consult UIA as well.
+
+### Changed
+- When the first folder of a group is gone, restore opens the nearest folder that still exists (its parent) instead of jumping to the home folder.
+- Progress advances for skipped folders, so the bar no longer stalls on them.
+- Status bar reports which folders were skipped.
+
+---
+
+## v2.2
 
 ### Added
 - **UIA fallback for reading open windows** — `Shell.Application.Windows()` only lists Explorer windows that registered in the Running Object Table, so COM can report zero windows while several are open. UIA resolves each window from its handle and reads the active tab's path from the breadcrumb bar, so anything COM missed is still saved.
