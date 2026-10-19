@@ -1,9 +1,12 @@
 # Folder Session Manager
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python)
-![PySide6](https://img.shields.io/badge/PySide6-6.x-41CD52?logo=qt)
-![License](https://img.shields.io/badge/License-MIT-yellow)
-![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows)
+<p align="center">
+  <a href="https://github.com/EternalShade3D/Folder-Session-Manager/releases/latest"><img src="https://img.shields.io/github/v/release/EternalShade3D/Folder-Session-Manager?style=for-the-badge&labelColor=26282e&label=release&color=41CD52" alt="Latest release"></a>
+  <a href="https://github.com/EternalShade3D/Folder-Session-Manager#requirements"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&labelColor=26282e&logo=python&logoColor=white" alt="Python 3.10+"></a>
+  <img src="https://img.shields.io/badge/PySide6-6.x-41CD52?style=for-the-badge&labelColor=26282e&logo=qt&logoColor=white" alt="PySide6">
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D4?style=for-the-badge&labelColor=26282e&logo=windows&logoColor=white" alt="Windows 10/11 only (pywin32 + UIA)">
+  <a href="https://github.com/EternalShade3D/Folder-Session-Manager/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge&labelColor=26282e" alt="License: MIT"></a>
+</p>
 
 Save and restore File Explorer window layouts — paths, positions, sizes, and open tabs.
 
